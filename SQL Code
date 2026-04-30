@@ -1,0 +1,450 @@
+SQL Code
+---
+
+CREATE DATABASE TechLayoffsProject;
+
+USE TechLayoffsProject;
+
+SELECT TOP 10 *
+FROM layoffs;
+
+EXEC sp_help layoffs;
+
+------------DATA CLEANING--------------
+-------Converting the 'Date_layoffs' column to proper date
+UPDATE layoffs
+SET Date_layoffs = TRY_CONVERT(DATE, Date_layoffs, 101);
+
+ALTER TABLE layoffs
+ALTER COLUMN Date_layoffs DATE;
+
+-------Converting numeric columns (just incase)
+ALTER TABLE layoffs
+ALTER COLUMN Laid_off INT;
+
+ALTER TABLE layoffs
+ALTER COLUMN Percentage FLOAT;
+
+ALTER TABLE layoffs
+ALTER COLUMN Company_Size_before_Layoffs INT;
+
+ALTER TABLE layoffs
+ALTER COLUMN Company_Size_after_Layoffs INT;
+
+ALTER TABLE layoffs
+ALTER COLUMN Money_Raised_in__mil FLOAT;
+
+-------Standardizing the USA country name
+UPDATE layoffs
+SET Country = 'United States'
+WHERE Country = 'USA';
+
+-------Standardizing the HigherEducation Industry name
+UPDATE layoffs
+SET Industry = 'Higher Education'
+WHERE Industry = 'Higher Education Industry';
+
+-------Handling missing data
+SELECT *
+FROM layoffs
+WHERE Laid_Off IS NULL;
+
+-------Removing duplicates, if present.
+WITH CTE AS (
+    SELECT *,
+    ROW_NUMBER() OVER (
+        PARTITION BY Company, Date_layoffs, Laid_Off
+        ORDER BY Nr
+    ) AS rn
+    FROM layoffs
+)
+DELETE FROM CTE WHERE rn > 1;
+
+-------Data validation check
+SELECT *
+FROM layoffs
+WHERE Company_Size_after_layoffs > Company_Size_before_Layoffs;
+
+
+
+--------FEATURE ENGINEERING----------
+ALTER TABLE layoffs
+ADD Month INT;
+
+ALTER TABLE layoffs
+ADD Stage_Group VARCHAR(50);
+
+ALTER TABLE layoffs 
+ADD Funding_Level VARCHAR(50);
+
+UPDATE layoffs
+SET 
+    Month = MONTH(Date_layoffs),
+
+    Stage_Group = 
+        CASE
+            WHEN Stage IN ('Seed') THEN 'Startup/Seed'
+            WHEN Stage IN ('Series A', 'Series B') THEN 'Early Stage'
+            WHEN Stage IN ('Series C', 'Series D', 'Series E') THEN 'Mid Stage'
+            WHEN Stage IN ('Series F', 'Series G', 'Series H', 'Series I', 'Series J', 'Private Equity') THEN 'Late Stage'
+            WHEN Stage IN ('Post-IPO') THEN 'Public'
+            WHEN Stage IN ('Acquired', 'Subsidiary') THEN 'Acquired/Subsidiary'
+            ELSE 'Unknown/Other'
+        END,
+
+    Funding_Level =
+        CASE
+            WHEN Money_Raised_in__mil IS NULL THEN 'Missing'
+            WHEN Money_Raised_in__mil < 0 THEN 'Invalid'
+            WHEN Money_Raised_in__mil < 50 THEN 'Low'
+            WHEN Money_Raised_in__mil < 500 THEN 'Medium'
+            ELSE 'High'
+        END;
+
+
+
+---------------------QUESTIONS---------------------
+---------------------------------------------------
+/*
+Q1. Which companies laid off the most employees?
+*/
+SELECT TOP 15 Company, 
+           SUM(Laid_off) AS Total_Layoffs
+FROM layoffs
+GROUP BY Company
+ORDER BY Total_Layoffs DESC;
+
+/*
+Q2. What is the Layoff Rate across companies?
+*/
+SELECT Company, 
+       SUM(Company_Size_before_Layoffs) AS Size_before_Layoff,
+       SUM(Laid_Off) AS Total_Laid_Off,
+       SUM(Laid_Off) * 1.0 / SUM(Company_Size_before_Layoffs) * 100 AS Layoff_Rate
+FROM layoffs
+GROUP BY Company
+ORDER BY Layoff_Rate DESC;
+
+/*
+Q3.  Which industries experienced the highest layoffs?
+*/
+SELECT TOP 10 Industry, SUM(Laid_off) AS Total_Layoffs
+FROM layoffs
+GROUP BY Industry
+ORDER BY Total_Layoffs DESC;
+
+/*
+Q4. Which industries have the highest layoff intensity (rate)?
+*/
+SELECT Industry, 
+       SUM(Company_Size_before_Layoffs) AS Size_before_Layoff,
+       SUM(Laid_Off) AS Total_Laid_Off,
+       SUM(Laid_Off) * 1.0 / SUM(Company_Size_before_Layoffs) * 100 AS Layoff_Rate
+FROM layoffs
+GROUP BY Industry
+ORDER BY Layoff_Rate DESC;
+
+
+/*
+Q5. Which countries are most affected?
+*/
+SELECT TOP 10 Country, SUM(Laid_off) AS Total_Layoffs
+FROM layoffs
+GROUP BY Country
+ORDER BY Total_Layoffs DESC;
+
+/*
+Q6. Which continents are most affected?
+*/
+SELECT TOP 10 Continent, SUM(Laid_off) AS Total_Layoffs
+FROM layoffs
+GROUP BY Continent
+ORDER BY Total_Layoffs DESC;
+
+/*
+Q7. When did layoffs peak?
+*/
+SELECT Year, SUM(Laid_off) AS Total_Layoffs
+FROM layoffs
+GROUP BY Year
+ORDER BY Year;
+--How severe were layoffs over time (Layoff Rate by Year)?
+SELECT 
+    Year,
+    SUM(Laid_Off) * 100.0 / SUM(Company_Size_before_Layoffs) AS Layoff_Rate
+FROM layoffs
+GROUP BY Year
+ORDER BY Year;
+
+/*
+Q8.How did layoffs evolve month-by-month?
+*/
+SELECT YEAR(Date_layoffs) AS Year, MONTH(Date_layoffs) AS Month,
+    SUM(Laid_Off) AS Total_Layoffs
+FROM layoffs
+GROUP BY YEAR(Date_layoffs), MONTH(Date_layoffs)
+ORDER BY Year, Month;
+
+---Highest layoff months
+SELECT TOP 10 YEAR(Date_layoffs) AS Year, MONTH(Date_layoffs) AS Month,
+    SUM(Laid_Off) AS Total_Layoffs
+FROM layoffs
+GROUP BY YEAR(Date_layoffs), MONTH(Date_layoffs)
+ORDER BY Total_Layoffs DESC;
+
+---Are layoffs concentrated in specific time periods (shock events)?
+WITH Monthly AS (
+    SELECT 
+        DATEFROMPARTS(YEAR(Date_layoffs), MONTH(Date_layoffs), 1) AS Month_Date,
+        SUM(Laid_Off) AS Total_Layoffs
+    FROM layoffs
+    GROUP BY YEAR(Date_layoffs), MONTH(Date_layoffs)
+)
+
+SELECT 
+    Month_Date,
+    Total_Layoffs,
+    LAG(Total_Layoffs) OVER (ORDER BY Month_Date) AS Prev,
+    Total_Layoffs - LAG(Total_Layoffs) OVER (ORDER BY Month_Date) AS Change
+FROM Monthly;
+
+/*
+Q9. Are startups or late-stage companies laying off more workers?
+*/
+SELECT Stage_Group, SUM(Laid_Off) AS Total_Layoffs
+FROM layoffs
+GROUP BY Stage_Group
+ORDER BY Total_Layoffs DESC;
+
+/*
+Q10. Is there a relationship between funding raised and layoffs?
+*/
+SELECT Funding_Level, SUM(Laid_Off) AS Total_Layoffs
+FROM layoffs
+GROUP BY Funding_Level;
+
+/*
+Q11. Do larger companies lay off more people?
+*/
+SELECT 
+CASE 
+    WHEN Company_Size_before_Layoffs < 100 THEN 'Small'
+    WHEN Company_Size_before_Layoffs < 1000 THEN 'Medium'
+    ELSE 'Large'
+END AS Company_Size_Group,
+SUM(Laid_Off) AS Total_Layoffs
+FROM layoffs
+GROUP BY 
+CASE 
+    WHEN Company_Size_before_Layoffs < 100 THEN 'Small'
+    WHEN Company_Size_before_Layoffs < 1000 THEN 'Medium'
+    ELSE 'Large'
+END;
+
+/*
+Q12. What is the survival impact on companies?
+*/
+SELECT 
+    Company,
+    SUM(Company_Size_before_Layoffs) AS Total_Before,
+    SUM(Company_Size_after_layoffs) AS Total_After,
+    (SUM(Company_Size_after_layoffs) * 1.0 / SUM(Company_Size_before_Layoffs)) * 100 AS Survival_Rate,
+    CASE
+        WHEN (SUM(Company_Size_after_layoffs) * 1.0 / SUM(Company_Size_before_Layoffs)) * 100 < 50 THEN 'Critical'
+        WHEN (SUM(Company_Size_after_layoffs) * 1.0 / SUM(Company_Size_before_Layoffs)) * 100 < 80 THEN 'Moderate'
+        ELSE 'Stable'
+    END AS Survival_Category
+FROM layoffs
+WHERE Company_Size_before_Layoffs > 0 
+GROUP BY Company
+ORDER BY Survival_Rate DESC;
+
+/*
+Q13. Do highly funded companies still lay off aggressively?
+*/
+SELECT 
+    Company,
+    Money_Raised_in__mil AS Funding_in_Milliions,
+    Funding_Level,
+    SUM(Company_Size_before_Layoffs) Size_before_Layofss,
+    SUM(Laid_Off) AS Total_Layoffs,
+    (SUM(Laid_Off) * 1.0 / SUM(Company_Size_before_Layoffs)) * 100 AS Layoff_Rate
+FROM layoffs
+WHERE Money_Raised_in__mil IS NOT NULL
+AND Company_Size_before_Layoffs > 0
+GROUP BY Company, Money_Raised_in__mil, Funding_level
+ORDER BY Funding_in_Milliions DESC;
+-----Funding-level aggregation
+SELECT 
+    Funding_Level,
+    SUM(Laid_Off) AS Total_Layoffs,
+    SUM(Laid_Off) * 1.0 / SUM(Company_Size_before_Layoffs) * 100 AS Layoff_Rate
+FROM layoffs
+WHERE Company_Size_before_Layoffs > 0
+GROUP BY Funding_Level;
+
+SELECT name
+FROM sys.views
+--------------------------VIEWS FOR DASHBOARD-------------------------
+----------------------------------------------------------------------
+
+------Q1
+CREATE VIEW vw_top_companies AS
+SELECT Company, 
+       SUM(Laid_off) AS Total_Layoffs
+FROM layoffs
+GROUP BY Company;
+GO
+
+------Q2
+CREATE VIEW vw_company_layoff_rate AS
+SELECT 
+    Company, 
+    SUM(Company_Size_before_Layoffs) AS Size_before_Layoff,
+    SUM(Laid_Off) AS Total_Laid_Off,
+    SUM(Laid_Off) * 1.0 / SUM(Company_Size_before_Layoffs) * 100 AS Layoff_Rate
+FROM layoffs
+GROUP BY Company;
+GO
+
+------Q3
+CREATE VIEW vw_industry_total AS
+SELECT Industry, 
+       SUM(Laid_off) AS Total_Layoffs
+FROM layoffs
+GROUP BY Industry;
+GO
+
+------Q4
+CREATE VIEW vw_industry_layoff_rate AS
+SELECT 
+    Industry, 
+    SUM(Company_Size_before_Layoffs) AS Size_before_Layoff,
+    SUM(Laid_Off) AS Total_Laid_Off,
+    SUM(Laid_Off) * 1.0 / SUM(Company_Size_before_Layoffs) * 100 AS Layoff_Rate
+FROM layoffs
+GROUP BY Industry;
+GO
+
+-----Q5
+CREATE VIEW vw_country_total AS
+SELECT Country, 
+       SUM(Laid_off) AS Total_Layoffs
+FROM layoffs
+GROUP BY Country;
+GO
+
+------Q6
+CREATE VIEW vw_continent_total AS
+SELECT Continent, 
+       SUM(Laid_off) AS Total_Layoffs
+FROM layoffs
+GROUP BY Continent;
+GO
+
+-----Q7
+CREATE VIEW vw_yearly_layoff_rate AS
+SELECT 
+    Year,
+    SUM(Laid_Off) * 100.0 / SUM(Company_Size_before_Layoffs) AS Layoff_Rate
+FROM layoffs
+GROUP BY Year;
+GO
+
+-----Q8
+CREATE VIEW vw_monthly_total AS
+SELECT 
+    YEAR(Date_layoffs) AS Year, 
+    MONTH(Date_layoffs) AS Month,
+    SUM(Laid_Off) AS Total_Layoffs
+FROM layoffs
+GROUP BY YEAR(Date_layoffs), MONTH(Date_layoffs);
+GO
+
+CREATE VIEW vw_top_months AS
+SELECT 
+    YEAR(Date_layoffs) AS Year, 
+    MONTH(Date_layoffs) AS Month,
+    SUM(Laid_Off) AS Total_Layoffs
+FROM layoffs
+GROUP BY YEAR(Date_layoffs), MONTH(Date_layoffs);
+GO
+
+---shock event
+CREATE VIEW vw_shock_events AS
+WITH Monthly AS (
+    SELECT 
+        DATEFROMPARTS(YEAR(Date_layoffs), MONTH(Date_layoffs), 1) AS Month_Date,
+        SUM(Laid_Off) AS Total_Layoffs
+    FROM layoffs
+    GROUP BY YEAR(Date_layoffs), MONTH(Date_layoffs)
+)
+SELECT 
+    Month_Date,
+    Total_Layoffs,
+    LAG(Total_Layoffs) OVER (ORDER BY Month_Date) AS Prev,
+    Total_Layoffs - LAG(Total_Layoffs) OVER (ORDER BY Month_Date) AS Change
+FROM Monthly;
+GO
+
+------Q9
+CREATE VIEW vw_stage_total AS
+SELECT Stage_Group, 
+       SUM(Laid_Off) AS Total_Layoffs
+FROM layoffs
+GROUP BY Stage_Group;
+GO
+
+------Q10
+CREATE VIEW vw_stage_total AS
+SELECT Stage_Group, 
+       SUM(Laid_Off) AS Total_Layoffs
+FROM layoffs
+GROUP BY Stage_Group;
+GO
+
+------Q11
+CREATE VIEW vw_funding_total AS
+SELECT Funding_Level, 
+       SUM(Laid_Off) AS Total_Layoffs
+FROM layoffs
+GROUP BY Funding_Level;
+GO
+
+-----Q12
+CREATE VIEW vw_company_size_total AS
+SELECT 
+CASE 
+    WHEN Company_Size_before_Layoffs < 100 THEN 'Small'
+    WHEN Company_Size_before_Layoffs < 1000 THEN 'Medium'
+    ELSE 'Large'
+END AS Company_Size_Group,
+SUM(Laid_Off) AS Total_Layoffs
+FROM layoffs
+GROUP BY 
+CASE 
+    WHEN Company_Size_before_Layoffs < 100 THEN 'Small'
+    WHEN Company_Size_before_Layoffs < 1000 THEN 'Medium'
+    ELSE 'Large'
+END;
+GO
+
+-----Q13
+CREATE VIEW vw_survival_analysis AS
+SELECT 
+    Company,
+    SUM(Company_Size_before_Layoffs) AS Total_Before,
+    SUM(Company_Size_after_layoffs) AS Total_After,
+    (SUM(Company_Size_after_layoffs) * 1.0 / SUM(Company_Size_before_Layoffs)) * 100 AS Survival_Rate,
+    CASE
+        WHEN (SUM(Company_Size_after_layoffs) * 1.0 / SUM(Company_Size_before_Layoffs)) * 100 < 50 THEN 'Critical'
+        WHEN (SUM(Company_Size_after_layoffs) * 1.0 / SUM(Company_Size_before_Layoffs)) * 100 < 80 THEN 'Moderate'
+        ELSE 'Stable'
+    END AS Survival_Category
+FROM layoffs
+WHERE Company_Size_before_Layoffs > 0
+GROUP BY Company;
+GO
+
+SELECT COUNT(Laid_Off)
+FROM layoffs;
